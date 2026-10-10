@@ -660,13 +660,9 @@ func (s *backupService) getVaultName(ctx context.Context, vaultID, uid int64) st
 func (s *backupService) runArchive(ctx context.Context, config *domain.BackupConfig, tempDir string, startTime time.Time, lastRun time.Time) (int64, int64, error) {
 	uid := config.UID
 	vaultName := s.getVaultName(ctx, config.VaultID, uid)
-	zipName := fmt.Sprintf("backup_%s_%d_%s_%s.zip", config.Type, uid, vaultName, startTime.Format("20060102_150405"))
 	if err := os.MkdirAll(s.backupStagingDir(), 0o755); err != nil {
 		return 0, 0, err
 	}
-	zipPath := filepath.Join(s.backupStagingDir(), zipName)
-
-	defer os.Remove(zipPath)
 
 	// 1. Collect resources (includes notes and attachments)
 	// 1. 收集资源 (包含笔记和附件)
@@ -680,18 +676,34 @@ func (s *backupService) runArchive(ctx context.Context, config *domain.BackupCon
 		return 0, 0, errNoUpdates
 	}
 
-	// 2. Zip archive
-	// 2. 压缩打包
+	// 2. Create an archive (ZIP without a password, header-encrypted 7z with a password)
+	// 2. 创建归档（无密码使用 ZIP，有密码使用加密文件头的 7z）
 	password := ""
 	switch config.PasswordMode {
 	case 1: // Fixed
 		password = config.PasswordValue
 	case 2: // Random
-		password = util.GetRandomString(12)
+		// 24 alphanumeric characters provide more than 140 bits of entropy.
+		// 24 位字母数字随机密码可提供超过 140 位的熵。
+		password = util.GetRandomString(24)
 	}
 
-	if err := util.ZipWithPassword(tempDir, zipPath, password); err != nil {
-		return 0, 0, err
+	archiveExtension := ".zip"
+	if password != "" {
+		archiveExtension = ".7z"
+	}
+	archiveName := fmt.Sprintf("backup_%s_%d_%s_%s%s", config.Type, uid, vaultName, startTime.Format("20060102_150405"), archiveExtension)
+	archivePath := filepath.Join(s.backupStagingDir(), archiveName)
+	defer os.Remove(archivePath)
+
+	var archiveErr error
+	if password == "" {
+		archiveErr = util.Zip(tempDir, archivePath)
+	} else {
+		archiveErr = util.SevenZipWithPasswordContext(ctx, tempDir, archivePath, password)
+	}
+	if archiveErr != nil {
+		return 0, 0, archiveErr
 	}
 
 	// 3. Upload to all storage targets
@@ -713,7 +725,7 @@ func (s *backupService) runArchive(ctx context.Context, config *domain.BackupCon
 			s.logger.Info("Storage is disabled, skipping", zap.Int64("sid", sid))
 			continue
 		}
-		if err := s.uploadArchive(ctx, uid, config.ID, st, zipPath, zipName, config.Type, password, startTime, count, size); err != nil {
+		if err := s.uploadArchive(ctx, uid, config.ID, st, archivePath, archiveName, config.Type, password, startTime, count, size); err != nil {
 			s.logger.Warn("Archive upload to storage failed", zap.Int64("sid", sid), zap.String("type", st.Type), zap.Error(err))
 			archiveErrors = append(archiveErrors, fmt.Sprintf("storage %d (%s): %v", sid, st.Type, err))
 		}
@@ -910,10 +922,10 @@ func (s *backupService) exportArchiveFiles(ctx context.Context, uid, vaultID int
 	return totalCount, totalSize, err
 }
 
-// uploadArchive Upload the archived ZIP file to specified storage target
+// uploadArchive uploads an archive file to the specified storage target.
 // Returns an error if upload (or any preceding step) fails so that callers can
 // aggregate per-storage failures and surface them to the API layer.
-// 将打包好的 ZIP 文件上传到指定的存储目标
+// 将归档文件上传到指定的存储目标。
 // 当上传（或前置步骤）失败时返回 error，便于上层聚合各存储的失败信息并上报到 API 层
 func (s *backupService) uploadArchive(ctx context.Context, uid, configId int64, stDTO *dto.StorageDTO, filePath, fileName, bType, password string, startTime time.Time, count, size int64) error {
 	h := &domain.BackupHistory{
@@ -949,7 +961,11 @@ func (s *backupService) uploadArchive(ctx context.Context, uid, configId int64, 
 	}
 	defer f.Close()
 
-	if _, err := client.SendFile(fileName, f, "application/zip", startTime); err != nil {
+	contentType := "application/zip"
+	if strings.EqualFold(filepath.Ext(fileName), ".7z") {
+		contentType = "application/x-7z-compressed"
+	}
+	if _, err := client.SendFile(fileName, f, contentType, startTime); err != nil {
 		msg := fmt.Sprintf("Upload failed: %v", err)
 		s.updateHistory(ctx, h, domain.BackupStatusFailed, msg)
 		return fmt.Errorf("upload archive: %w", err)

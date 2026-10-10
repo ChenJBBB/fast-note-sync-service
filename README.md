@@ -82,7 +82,7 @@ For users in Mainland China, it is recommended to use the Tencent cnb.cool mirro
 
 * **☁️ Multi-Storage Backup & One-way Mirror Sync**:
   * Adapts to S3, OSS, R2, WebDAV, local filesystem, and other storage protocols.
-  * Supports scheduled full or incremental ZIP archive backups.
+  * Supports scheduled full or incremental archive backups. Unencrypted backups use ZIP; password-protected backups use 7z with encrypted headers so file and directory names are not exposed.
   * Supports one-way mirror synchronization of Vault resources to remote storage.
   * Automatically cleans up expired backups with custom retention days.
 
@@ -198,6 +198,8 @@ Download the latest version for your system from [Releases](https://github.com/h
 ```bash
 ./fast-note-sync-service run -c config/config.yaml
 ```
+
+Password-protected backups require a 7-Zip command-line executable (`7zz`, `7z`, or `7za`) on `PATH`. You can also set `SEVENZIP_BINARY` to its full path. The Docker image already includes this dependency.
 
 ## 📖 User Guide
 

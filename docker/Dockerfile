@@ -36,7 +36,7 @@ ENV TZ=Asia/Shanghai
 ENV P_NAME=fast-note-sync
 ENV P_BIN=fast-note-sync-service
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk --no-cache add --no-progress libstdc++ curl ca-certificates bash gcompat tzdata && \
+    apk --no-cache add --no-progress libstdc++ curl ca-certificates bash gcompat tzdata 7zip && \
     cp /usr/share/zoneinfo/${TZ} /etc/localtime && \
     echo ${TZ} > /etc/timezone && \
     mkdir -p /${P_NAME}/

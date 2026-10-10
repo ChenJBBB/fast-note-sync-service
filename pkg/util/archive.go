@@ -1,12 +1,20 @@
 package util
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/yeka/zip"
 )
+
+var sevenZipExecutableNames = []string{"7zz", "7z", "7za"}
 
 // Zip compresses files or directories into a zip file
 // source: path to file or directory
@@ -96,6 +104,103 @@ func ZipWithPassword(source, target, password string) error {
 		_, err = io.Copy(writer, file)
 		return err
 	})
+}
+
+// SevenZipWithPassword creates a password-protected 7z archive and encrypts
+// both file contents and archive headers (including file and directory names).
+// It requires 7zz, 7z, or 7za to be installed, unless SEVENZIP_BINARY points
+// to a compatible executable.
+func SevenZipWithPassword(source, target, password string) error {
+	return SevenZipWithPasswordContext(context.Background(), source, target, password)
+}
+
+// SevenZipWithPasswordContext is SevenZipWithPassword with cancellation support.
+func SevenZipWithPasswordContext(ctx context.Context, source, target, password string) error {
+	if password == "" {
+		return errors.New("7z archive password must not be empty")
+	}
+
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+
+	executable, err := findSevenZipExecutable()
+	if err != nil {
+		return err
+	}
+
+	source, err = filepath.Abs(source)
+	if err != nil {
+		return err
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+
+	workingDir := filepath.Dir(source)
+	inputPath := filepath.Base(source)
+	if info.IsDir() {
+		workingDir = source
+		inputPath = "."
+	}
+
+	// 7-Zip updates an existing archive by default. Remove the target first so
+	// a retry cannot retain entries from a previous, partially written archive.
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	args := sevenZipArchiveArgs(target, inputPath, password)
+	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd.Dir = workingDir
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(target)
+		message := strings.TrimSpace(strings.ReplaceAll(output.String(), password, "[REDACTED]"))
+		if message == "" {
+			return fmt.Errorf("7z archive creation failed: %w", err)
+		}
+		return fmt.Errorf("7z archive creation failed: %w: %s", err, message)
+	}
+
+	return nil
+}
+
+func sevenZipArchiveArgs(target, inputPath, password string) []string {
+	return []string{
+		"a",
+		"-t7z",
+		"-mhe=on",
+		"-p" + password,
+		"-y",
+		"-bd",
+		"--",
+		target,
+		inputPath,
+	}
+}
+
+func findSevenZipExecutable() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("SEVENZIP_BINARY")); configured != "" {
+		path, err := exec.LookPath(configured)
+		if err != nil {
+			return "", fmt.Errorf("configured SEVENZIP_BINARY %q was not found: %w", configured, err)
+		}
+		return path, nil
+	}
+
+	for _, name := range sevenZipExecutableNames {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", errors.New("7-Zip executable not found; install 7zz, 7z, or 7za, or set SEVENZIP_BINARY")
 }
 
 // ZipBytes creates a zip archive from a map of filenames and their contents (bytes)
