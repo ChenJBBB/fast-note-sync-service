@@ -48,3 +48,18 @@ func TestFindSevenZipExecutableUsesConfiguredPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, executable, actual)
 }
+
+func TestFindSevenZipBesideExecutable(t *testing.T) {
+	tempDir := t.TempDir()
+	name := "7zz"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	want := filepath.Join(tempDir, name)
+	require.NoError(t, os.WriteFile(want, []byte{}, 0o755))
+
+	actual, ok := findSevenZipBesideExecutable(filepath.Join(tempDir, "fast-note-sync-service"))
+
+	require.True(t, ok)
+	assert.Equal(t, want, actual)
+}

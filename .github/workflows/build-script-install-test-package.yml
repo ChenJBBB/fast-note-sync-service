@@ -1,0 +1,71 @@
+name: Build script-install encrypted 7z test package
+
+on:
+  push:
+    branches:
+      - feature/encrypted-7z-backups
+    paths:
+      - .github/workflows/build-script-install-test-package.yml
+      - scripts/install_encrypted_7z_test.sh
+      - pkg/util/archive.go
+      - pkg/util/archive_test.go
+      - internal/service/backup.go
+      - internal/service/backup_test.go
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            sevenzip_arch: x64
+          - goarch: arm64
+            sevenzip_arch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./pkg/util ./internal/service
+
+      - name: Build application
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p package
+          go build -trimpath -o package/fast-note-sync-service .
+
+      - name: Add standalone 7-Zip
+        env:
+          SEVENZIP_ARCH: ${{ matrix.sevenzip_arch }}
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-linux-${SEVENZIP_ARCH}.tar.xz" \
+            --output /tmp/7zip.tar.xz
+          tar -xJf /tmp/7zip.tar.xz -C /tmp 7zz
+          install -m 0755 /tmp/7zz package/7zz
+
+      - name: Assemble package
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          install -m 0755 scripts/install_encrypted_7z_test.sh package/install_encrypted_7z_test.sh
+          (cd package && sha256sum fast-note-sync-service 7zz > SHA256SUMS)
+          tar -czf "fast-note-sync-service-encrypted-7z-test-linux-${GOARCH}.tar.gz" -C package .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fast-note-sync-service-encrypted-7z-test-linux-${{ matrix.goarch }}
+          path: fast-note-sync-service-encrypted-7z-test-linux-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7

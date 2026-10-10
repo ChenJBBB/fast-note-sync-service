@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/yeka/zip"
@@ -194,6 +195,12 @@ func findSevenZipExecutable() (string, error) {
 		return path, nil
 	}
 
+	if executable, err := os.Executable(); err == nil {
+		if path, ok := findSevenZipBesideExecutable(executable); ok {
+			return path, nil
+		}
+	}
+
 	for _, name := range sevenZipExecutableNames {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil
@@ -201,6 +208,23 @@ func findSevenZipExecutable() (string, error) {
 	}
 
 	return "", errors.New("7-Zip executable not found; install 7zz, 7z, or 7za, or set SEVENZIP_BINARY")
+}
+
+func findSevenZipBesideExecutable(executable string) (string, bool) {
+	dir := filepath.Dir(executable)
+	for _, name := range sevenZipExecutableNames {
+		candidates := []string{filepath.Join(dir, name)}
+		if runtime.GOOS == "windows" {
+			candidates = append(candidates, filepath.Join(dir, name+".exe"))
+		}
+		for _, candidate := range candidates {
+			info, err := os.Stat(candidate)
+			if err == nil && !info.IsDir() {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
 }
 
 // ZipBytes creates a zip archive from a map of filenames and their contents (bytes)
