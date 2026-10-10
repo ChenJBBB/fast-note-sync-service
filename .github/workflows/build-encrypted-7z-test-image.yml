@@ -1,0 +1,74 @@
+name: Build encrypted 7z test images
+
+on:
+  push:
+    branches:
+      - feature/encrypted-7z-backups
+    paths:
+      - ".github/workflows/build-encrypted-7z-test-image.yml"
+      - "docker/Dockerfile"
+      - "internal/service/backup_service.go"
+      - "pkg/util/archive.go"
+      - "pkg/util/archive_test.go"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build linux/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run archive and backup tests
+        run: go test ./pkg/util ./internal/service
+
+      - name: Build service binary
+        env:
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "build/linux_${GOARCH}"
+          CGO_ENABLED=0 GOOS=linux go build             -o "build/linux_${GOARCH}/fast-note-sync-service"             .
+
+      - name: Enable cross-architecture Docker builds
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build Docker image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker build             --platform "linux/${ARCH}"             --build-arg TARGETOS=linux             --build-arg "TARGETARCH=${ARCH}"             --build-arg VERSION=encrypted-7z-test             --build-arg "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"             --build-arg "GIT_COMMIT=${GITHUB_SHA}"             --tag "fast-note-sync-service:encrypted-7z-${ARCH}"             --file docker/Dockerfile             .
+
+      - name: Export Docker image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker save "fast-note-sync-service:encrypted-7z-${ARCH}" |
+            gzip -9 > "fast-note-sync-service-encrypted-7z-linux-${ARCH}.tar.gz"
+          sha256sum "fast-note-sync-service-encrypted-7z-linux-${ARCH}.tar.gz"             > "fast-note-sync-service-encrypted-7z-linux-${ARCH}.tar.gz.sha256"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-note-sync-service-encrypted-7z-linux-${{ matrix.arch }}
+          path: |
+            fast-note-sync-service-encrypted-7z-linux-${{ matrix.arch }}.tar.gz
+            fast-note-sync-service-encrypted-7z-linux-${{ matrix.arch }}.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
